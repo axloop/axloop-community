@@ -1,24 +1,28 @@
 # Community releases
 
-Community artifacts and GitHub Releases live in this private repository: https://github.com/axloop/axloop-community.
+This page explains how AxLoop Community versions and installs are tracked and announced.
 
-Enterprise source, build, signing, and acceptance remain in https://github.com/ascendantventures/axloop-edge-poc. This repository is the Releases home, not a copy of that factory.
+## Where to look
 
-No Community release has been published from this repository yet. The enterprise Aug 29 staging draft tagged `community-acceptance-staging-2026-08-29` is not a Community release, is not this repository's release home, and must not be used, copied, retagged, attached, or published.
+- [`CHANGELOG.md`](../CHANGELOG.md) records notable Community changes. Work that has not shipped yet is listed under `Unreleased`; each published version gets its own dated section when it is released.
+- [GitHub Releases](https://github.com/axloop/axloop-community/releases) is the canonical place to find Community installs. The newest one will always be at <https://github.com/axloop/axloop-community/releases/latest>.
 
-The CLI `radar`→`crawler` rename (radar→crawler) is later and is not part of this split.
+## Current state
 
-The enterprise repository retains Community builds, signing requests, attended signing with PKCS#8 on Abe's Mac, offline verification, release envelopes, clean-host acceptance, notarization, and Authenticode gates. PKCS#8 never enters this repository or CI.
+No Community GitHub Release has been published yet. There is no supported Community install until the first release appears on the Releases page.
 
-## What this repository does not do
+This documentation change creates no release, tag, artifact, release draft, or publishing workflow. Publishing the first Community release is a separate, future approval.
 
-This repository does not build, sign, accept, notarize, or publish artifacts. Publishing a Community release is a separate, future approval and is not represented by any workflow, flag, or dormant step in this repository. The optional draft-only attachment workflow described in the design has been omitted; documentation establishes the Releases home.
+## Rules that stay fixed
 
-## Boundary check
+- Release signing material never belongs in Community CI. Signing keys and PKCS#8 material are not stored, referenced, or used by anything in this repository.
+- The historical 2026-08-29 acceptance-staging tag is not a release input. It must not be reused, retagged, attached, or published as a Community release.
 
-`scripts/check-community-split.py` verifies that this tree stays a Releases home and never becomes a copy of the enterprise factory. Run it from the repository root:
+## Policy check
+
+`scripts/check-community-split.py` enforces these rules across every text file in the repository, including Markdown. Run it from the repository root:
 
 ```bash
-python3 -m unittest -v tests/test_community_split.py
+python3 -m unittest discover -s tests -v
 python3 scripts/check-community-split.py .
 ```

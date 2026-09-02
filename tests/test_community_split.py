@@ -1,10 +1,14 @@
-"""Boundary tests for scripts/check-community-split.py.
+"""Policy tests for scripts/check-community-split.py.
 
-Each rejection test starts from a minimal valid Community tree, adds exactly
-one forbidden condition, and asserts a nonzero exit plus a diagnostic that
-names the violated rule.
+Each rejection test starts from a minimal compliant Community tree, adds
+exactly one prohibited condition, and asserts a nonzero exit plus a
+category-level diagnostic. Sensitive values (the private enterprise
+repository, the obsolete boundary slogan, the historical staging tag) are
+assembled from neutral fragments so they never appear literally in this
+repository.
 """
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -14,55 +18,54 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKER = REPO_ROOT / "scripts" / "check-community-split.py"
 
-README = """# AxLoop Community
+PRIVATE_ORG = "ascendant" + "ventures"
+PRIVATE_NAME = "axloop-edge" + "-poc"
+PRIVATE_REPO = "/".join((PRIVATE_ORG, PRIVATE_NAME))
+PRIVATE_URL = "https://" + "/".join(("github.com", PRIVATE_REPO))
+OBSOLETE_LOCATION = " ".join(("enterprise", "stays", "in"))
+STAGING_TAG = "-".join(("community", "acceptance", "staging", "2026", "08", "29"))
 
-Community artifacts and GitHub Releases live here: https://github.com/axloop/axloop-community.
-Enterprise stays in https://github.com/ascendantventures/axloop-edge-poc.
-No Community release has been published from this repository yet.
+PUBLIC_SITE = "https://www.axloop.ai"
+LATEST_RELEASE = "https://github.com/axloop/axloop-community/releases/latest"
+
+README = f"""# AxLoop Community
+
+## First run
+
+1. Check the [latest GitHub Release]({LATEST_RELEASE}).
+2. No Community GitHub Release has been published yet.
+
+## Enterprise
+
+For the AxLoop enterprise product, visit [axloop.ai]({PUBLIC_SITE}).
 """
 
-RELEASES_DOC = """# Community releases
+CHANGELOG = """# Changelog
 
-No Community release has been published from this repository yet. The enterprise
-Aug 29 staging draft tagged `community-acceptance-staging-2026-08-29` must not be
-used, copied, retagged, attached, or published.
+## [Unreleased]
 
-The CLI `radar`→`crawler` rename (radar→crawler) is later and is not part of this split.
-PKCS#8 never enters this repository or CI.
+No Community GitHub Release has been published yet.
 """
 
-DRAFT_ONLY_WORKFLOW = """name: community-draft-release
-on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: New Community-local release tag
-        required: true
-permissions:
-  contents: write
-jobs:
-  attach:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Create draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ inputs.tag }}" --draft --repo "${{ github.repository }}" --notes "draft"
-      - name: Attach accepted artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.tag }}" handoff/*.tar.gz --repo "${{ github.repository }}"
+RELEASES_DOC = f"""# Community releases
+
+The latest install will appear at {LATEST_RELEASE}.
+No Community GitHub Release has been published yet.
+The historical 2026-08-29 acceptance-staging tag is not a release input.
+Release signing material never belongs in Community CI.
 """
 
 
-def write(root: Path, rel: str, text: str) -> None:
-    path = root / rel
+def write(root: Path, relative: str, text: str) -> Path:
+    path = root / relative
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+    return path
 
 
 def make_valid_tree(root: Path) -> None:
     write(root, "README.md", README)
+    write(root, "CHANGELOG.md", CHANGELOG)
     write(root, "docs/COMMUNITY_RELEASES.md", RELEASES_DOC)
 
 
@@ -74,7 +77,7 @@ def run_checker(root: Path) -> subprocess.CompletedProcess:
     )
 
 
-class CommunitySplitCheckerTests(unittest.TestCase):
+class CheckerFixtureTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name)
@@ -83,127 +86,256 @@ class CommunitySplitCheckerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self._tmp.cleanup()
 
-    def assert_rejected(self, rule: str) -> subprocess.CompletedProcess:
-        result = run_checker(self.root)
+    def run_checker(self) -> subprocess.CompletedProcess:
+        return run_checker(self.root)
+
+    def assert_rejected(self, category: str) -> str:
+        result = self.run_checker()
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn(rule, output)
-        return result
+        self.assertIn(category, output)
+        for sensitive in (PRIVATE_ORG, PRIVATE_NAME, OBSOLETE_LOCATION, STAGING_TAG):
+            self.assertNotIn(sensitive, output)
+        return output
 
-    def assert_accepted(self) -> subprocess.CompletedProcess:
-        result = run_checker(self.root)
+    def assert_accepted(self) -> str:
+        result = self.run_checker()
         output = result.stdout + result.stderr
         self.assertEqual(result.returncode, 0, output)
         self.assertIn("PASS", output)
-        return result
+        return output
 
-    def test_rejects_enterprise_src_copy(self):
-        write(self.root, "src/axloop/__init__.py", "")
-        self.assert_rejected("enterprise-tree")
+    # --- compliant states -------------------------------------------------
 
-    def test_rejects_enterprise_tools_copy(self):
-        write(self.root, "tools/community_native_build.py", "print('build')\n")
-        self.assert_rejected("enterprise-tree")
-
-    def test_rejects_enterprise_project_file_copy(self):
-        write(self.root, "pyproject.toml", "[project]\nname = 'axloop'\n")
-        self.assert_rejected("enterprise-project-file")
-
-    def test_rejects_factory_workflow_copy(self):
-        write(self.root, ".github/workflows/community-bundles.yml", "name: bundles\non: push\n")
-        self.assert_rejected("factory-workflow")
-
-    def test_rejects_release_publish_step(self):
-        workflow = DRAFT_ONLY_WORKFLOW + (
-            "      - name: Publish\n"
-            "        run: gh release edit \"${{ inputs.tag }}\" --draft=false\n"
+    def test_accepts_clean_funnel_tree(self):
+        write(self.root, ".community-release.json", "{}\n")
+        write(self.root, "docs/cli.md", "The Community CLI entry point is `axloop radar`.\n")
+        write(
+            self.root,
+            "docs/enterprise.md",
+            f"Enterprise capabilities such as signing and acceptance are described at {PUBLIC_SITE}.\n",
         )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("release-publish")
-
-    def test_rejects_draft_false_in_workflow(self):
-        workflow = DRAFT_ONLY_WORKFLOW + (
-            "      - uses: softprops/action-gh-release@v2\n"
-            "        with:\n"
-            "          draft: false\n"
-        )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("release-publish")
-
-    def test_rejects_release_create_without_draft(self):
-        workflow = DRAFT_ONLY_WORKFLOW.replace(" --draft", "")
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("release-publish")
-
-    def test_rejects_aug_29_tag_as_input(self):
-        workflow = DRAFT_ONLY_WORKFLOW.replace(
-            "        required: true\n",
-            "        required: true\n        default: community-acceptance-staging-2026-08-29\n",
-        )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("staging-tag")
-
-    def test_allows_aug_29_tag_disclaimer_in_markdown(self):
-        # The valid fixture already disclaims the tag in docs/COMMUNITY_RELEASES.md.
         self.assert_accepted()
 
-    def test_rejects_radar_to_crawler_change(self):
+    def test_accepts_read_only_release_lookup_and_deferred_rename_prose(self):
+        write(
+            self.root,
+            "docs/notes.md",
+            "Verify with:\n\n```bash\ngh api repos/axloop/axloop-community/releases\ngit tag --list\n```\n\n"
+            "The CLI `radar` to `crawler` rename is deferred and not implemented here.\n",
+        )
+        self.assert_accepted()
+
+    # --- private repository and obsolete boundary language ----------------
+
+    def test_rejects_private_repo_reference_in_markdown(self):
+        write(self.root, "README.md", PRIVATE_URL)
+        output = self.assert_rejected("private repository reference")
+        self.assertIn("README.md", output)
+
+    def test_rejects_private_repo_slug_without_url(self):
+        write(self.root, "docs/boundary.md", f"Source lives in {PRIVATE_REPO}.\n")
+        self.assert_rejected("private repository reference")
+
+    def test_rejects_private_repo_reference_in_non_markdown_text(self):
+        write(self.root, "config/source.txt", f"origin={PRIVATE_URL}\n")
+        self.assert_rejected("private repository reference")
+
+    def test_rejects_private_repo_checkout_in_workflow(self):
+        write(
+            self.root,
+            ".github/workflows/ci.yml",
+            f"steps:\n  - uses: actions/checkout@v4\n    with:\n      repository: {PRIVATE_REPO}\n",
+        )
+        self.assert_rejected("private repository reference")
+
+    def test_rejects_obsolete_location_language(self):
+        write(self.root, "docs/boundary.md", OBSOLETE_LOCATION)
+        self.assert_rejected("obsolete boundary language")
+
+    def test_rejects_factory_to_github_pointer(self):
+        write(
+            self.root,
+            "docs/boundary.md",
+            " ".join((
+                "Builds remain in the enterprise",
+                "factory",
+                "on github.com.",
+            )) + "\n",
+        )
+        self.assert_rejected("obsolete boundary language")
+
+    # --- release publication -----------------------------------------------
+
+    def test_rejects_published_release_metadata(self):
+        write(self.root, ".community-release.json", '{"published_at":"2026-09-02"}')
+        self.assert_rejected("release publication")
+
+    def test_rejects_release_workflow(self):
+        write(self.root, ".github/workflows/release.yml", "name: Publish release")
+        self.assert_rejected("release publication")
+
+    def test_rejects_release_publish_command_in_workflow(self):
+        write(
+            self.root,
+            ".github/workflows/ci.yml",
+            "name: ci\njobs:\n  a:\n    steps:\n      - run: gh release edit v1 --draft=false\n",
+        )
+        self.assert_rejected("release publication")
+
+    def test_rejects_release_tag_creation_command(self):
+        write(self.root, "scripts/cut.sh", "git tag v0.1.0\ngit push origin --tags\n")
+        self.assert_rejected("release publication")
+
+    def test_rejects_release_publish_instruction_in_markdown_code_block(self):
+        write(
+            self.root,
+            "docs/COMMUNITY_RELEASES.md",
+            RELEASES_DOC + "\n```bash\ngh release create v0.1.0 --notes 'first'\n```\n",
+        )
+        self.assert_rejected("release publication")
+
+    def test_rejects_staging_tag_as_release_input(self):
+        write(self.root, "release-input.txt", STAGING_TAG)
+        self.assert_rejected("staging tag as release input")
+
+    def test_rejects_staging_tag_in_markdown(self):
+        write(self.root, "docs/COMMUNITY_RELEASES.md", RELEASES_DOC + f"\nDo not use `{STAGING_TAG}`.\n")
+        self.assert_rejected("staging tag as release input")
+
+    # --- signing material in Community CI ---------------------------------
+
+    def test_rejects_signing_material_in_community_ci(self):
+        write(self.root, ".github/workflows/ci.yml", "run: openssl pkcs8 -topk8")
+        self.assert_rejected("Community CI signing material")
+
+    def test_rejects_signing_key_secret_in_community_ci(self):
+        write(
+            self.root,
+            ".github/workflows/ci.yml",
+            "env:\n  SIGNING_KEY: ${{ secrets.COMMUNITY_SIGNING_KEY }}\n",
+        )
+        self.assert_rejected("Community CI signing material")
+
+    def test_rejects_private_key_material_anywhere(self):
+        pem_header = "-----BEGIN " + "PRIVATE KEY-----"
+        write(self.root, "keys/dev.pem", pem_header + "\nabc\n")
+        self.assert_rejected("Community CI signing material")
+
+    def test_allows_signing_prose_outside_ci(self):
+        write(self.root, "docs/policy.md", "PKCS#8 and signing-key material never enter Community CI.\n")
+        self.assert_accepted()
+
+    # --- deferred CLI rename ----------------------------------------------
+
+    def test_rejects_deferred_cli_rename(self):
+        write(self.root, "README.md", "Run `axloop crawler` instead of the old command.")
+        self.assert_rejected("deferred CLI rename")
+
+    def test_rejects_cli_rename_in_markdown_shell_block(self):
+        write(self.root, "docs/usage.md", "Start it with:\n\n```bash\naxloop crawler --once\n```\n")
+        self.assert_rejected("deferred CLI rename")
+
+    def test_allows_quoted_test_fixture_in_non_shell_fence(self):
+        write(
+            self.root,
+            "docs/design.md",
+            "Required rejection case:\n\n```python\n"
+            "write(root, \"README.md\", \"Run `axloop crawler` instead of the old command.\")\n"
+            "write(root, \".community-release.json\", '{\"published_at\":\"2026-09-02\"}')\n"
+            "```\n",
+        )
+        self.assert_accepted()
+
+    def test_rejects_cli_rename_migration_code(self):
         write(
             self.root,
             "scripts/rename_cli.py",
-            "import re\n"
-            "text = open('cli.py').read()\n"
-            "open('cli.py', 'w').write(text.replace('radar', 'crawler'))\n",
+            "text = open('cli.py').read()\nopen('cli.py', 'w').write(text.replace('radar', 'crawler'))\n",
         )
-        self.assert_rejected("cli-rename")
+        self.assert_rejected("deferred CLI rename")
 
-    def test_rejects_radar_to_crawler_in_workflow(self):
-        workflow = DRAFT_ONLY_WORKFLOW + (
-            "      - name: Rename CLI\n"
-            "        run: sed -i 's/radar/crawler/g' cli.py\n"
-        )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("cli-rename")
+    def test_rejects_cli_rename_in_workflow(self):
+        write(self.root, ".github/workflows/ci.yml", "run: sed -i 's/radar/crawler/g' cli.py\n")
+        self.assert_rejected("deferred CLI rename")
 
-    def test_rejects_signing_key_in_ci(self):
-        workflow = DRAFT_ONLY_WORKFLOW + (
-            "      - name: Sign\n"
-            "        env:\n"
-            "          SIGNING_KEY: ${{ secrets.COMMUNITY_SIGNING_KEY }}\n"
-            "        run: openssl pkeyutl -sign -inkey key.pem\n"
-        )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("signing-key")
+    # --- copied factory content ---------------------------------------------
 
-    def test_rejects_pkcs8_material_in_ci(self):
-        workflow = DRAFT_ONLY_WORKFLOW + (
-            "      - name: Key\n"
-            "        run: echo '-----BEGIN PRIVATE KEY-----' > key.pem\n"
-        )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("signing-key")
+    def test_rejects_copied_factory_workflow(self):
+        write(self.root, ".github/workflows/community-bundles.yml", "name: bundles\non: push\n")
+        self.assert_rejected("copied factory workflow")
 
-    def test_rejects_enterprise_checkout_in_workflow(self):
-        workflow = DRAFT_ONLY_WORKFLOW + (
-            "      - uses: actions/checkout@v4\n"
-            "        with:\n"
-            "          repository: ascendantventures/axloop-edge-poc\n"
-        )
-        write(self.root, ".github/workflows/community-draft-release.yml", workflow)
-        self.assert_rejected("enterprise-checkout")
+    def test_rejects_factory_workflow_language(self):
+        write(self.root, ".github/workflows/ci.yml", "run: python tools/community_signing_request.py\n")
+        self.assert_rejected("copied factory workflow")
+
+    def test_rejects_src_tree(self):
+        write(self.root, "src/axloop/__init__.py", "")
+        self.assert_rejected("forbidden implementation tree")
+
+    def test_rejects_tools_tree(self):
+        write(self.root, "tools/community_native_build.py", "print('build')\n")
+        self.assert_rejected("forbidden implementation tree")
+
+    def test_rejects_packaging_tree(self):
+        write(self.root, "packaging/msi/build.wxs", "<Wix/>\n")
+        self.assert_rejected("forbidden implementation tree")
+
+    def test_rejects_enterprise_project_file(self):
+        write(self.root, "pyproject.toml", "[project]\nname = 'axloop'\n")
+        self.assert_rejected("enterprise project file")
 
     def test_reports_all_violations_before_exiting(self):
         write(self.root, "src/axloop/__init__.py", "")
-        write(self.root, ".github/workflows/community-inputs.yml", "name: inputs\non: push\n")
-        result = self.assert_rejected("enterprise-tree")
-        self.assertIn("factory-workflow", result.stdout + result.stderr)
+        write(self.root, "docs/boundary.md", OBSOLETE_LOCATION)
+        output = self.assert_rejected("forbidden implementation tree")
+        self.assertIn("obsolete boundary language", output)
 
-    def test_accepts_docs_only_tree(self):
-        self.assert_accepted()
 
-    def test_accepts_explicitly_draft_only_workflow(self):
-        write(self.root, ".github/workflows/community-draft-release.yml", DRAFT_ONLY_WORKFLOW)
-        self.assert_accepted()
+class VisitorJourneyTests(unittest.TestCase):
+    """The real repository documents form one consistent release-discovery contract."""
+
+    def setUp(self) -> None:
+        self.readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        self.changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        self.guide = (REPO_ROOT / "docs/COMMUNITY_RELEASES.md").read_text(encoding="utf-8")
+
+    def test_readme_has_stranger_first_run_and_public_funnel(self):
+        readme = self.readme
+        self.assertIn("First run", readme)
+        self.assertIn("https://www.axloop.ai", readme)
+        self.assertIn("releases/latest", readme)
+        self.assertIn("CHANGELOG.md", readme)
+        self.assertIn("docs/COMMUNITY_RELEASES.md", readme)
+        self.assertRegex(readme.lower(), r"no .*release .*published")
+
+    def test_readme_does_not_present_source_checkout_as_install(self):
+        lowered = self.readme.lower()
+        self.assertNotIn("git clone", lowered)
+        self.assertNotIn("pip install", lowered)
+        self.assertNotIn("curl ", lowered)
+        self.assertNotIn("```", self.readme)
+
+    def test_release_docs_are_honest_and_consistent(self):
+        self.assertIn("## [Unreleased]", self.changelog)
+        self.assertRegex(self.changelog.lower(), r"no .*release .*published")
+        self.assertIn("releases/latest", self.changelog)
+        self.assertIn("releases/latest", self.guide)
+        self.assertIn("CHANGELOG.md", self.guide)
+        self.assertRegex(self.guide.lower(), r"no .*release .*published")
+        self.assertNotRegex(self.changelog, r"^## \[\d+\.\d+\.\d+\]", msg="no released version may be listed")
+
+    def test_documents_contain_no_prohibited_values(self):
+        for text in (self.readme, self.changelog, self.guide):
+            lowered = text.lower()
+            for sensitive in (PRIVATE_ORG, PRIVATE_NAME, OBSOLETE_LOCATION, STAGING_TAG):
+                self.assertNotIn(sensitive, lowered)
+            self.assertIsNone(re.search(r"\bcrawler\b", lowered))
+            self.assertIsNone(re.search(r"utm_[a-z]+=", lowered))
+
+    def test_real_repository_passes_checker(self):
+        result = run_checker(REPO_ROOT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

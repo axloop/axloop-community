@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""Verify that axloop/axloop-community stays a Releases home, not an enterprise factory copy.
+"""Fail-closed policy checker for axloop/axloop-community.
 
-Standard library only. Exit 0 when the tree is allowed; print every violation
-and exit 1 otherwise. Each violation line is prefixed with its rule id:
+Standard library only. Exit 0 when the tree is compliant; print every
+violation and exit 1 otherwise. Every text file in the tree is scanned,
+including Markdown. Each violation line names a rule category and a file
+location and never echoes the matched value:
 
-  enterprise-tree          top-level enterprise directory copied into Community
-  enterprise-project-file  enterprise project/metadata file copied into Community
-  factory-workflow         enterprise factory workflow name under .github/workflows
-  release-publish          a workflow path that can publish or un-draft a release
-  staging-tag              community-acceptance-staging-2026-08-29 used in executable config
-  cli-rename               radar->crawler rename implemented in code or workflow
-  signing-key              private-key material, signing command, or key secret in CI
-  enterprise-checkout      workflow checks out or downloads the enterprise repository
+  private repository reference    the private enterprise repository (URL or slug)
+  obsolete boundary language      old "where the source lives" pointers to a factory repo
+  release publication             release workflow, publish/tag command, nonempty release metadata
+  staging tag as release input    the historical 2026-08-29 acceptance-staging tag
+  Community CI signing material   PKCS#8, signing commands, or key secrets in CI; private keys anywhere
+  deferred CLI rename             the radar->crawler rename implemented as a command or migration
+  copied factory workflow         enterprise factory workflow names or tooling
+  forbidden implementation tree   top-level src/, tools/, packaging/ and other factory trees
+  enterprise project file         enterprise project/metadata file copied into Community
+
+Sensitive match values are assembled from neutral fragments so they do not
+appear literally in this repository.
 """
 
 from __future__ import annotations
@@ -20,7 +26,29 @@ import re
 import sys
 from pathlib import Path
 
-ENTERPRISE_DIRS = {"src", "tools", "packaging", "hosted", "supabase", "acceptance", "release"}
+# --- sensitive values assembled from fragments -------------------------------
+
+PRIVATE_ORG = "ascendant" + "ventures"
+PRIVATE_NAME = "axloop-edge" + "-poc"
+PRIVATE_REPO = "/".join((PRIVATE_ORG, PRIVATE_NAME))
+STAGING_TAG = "-".join(("community", "acceptance", "staging", "2026", "08", "29"))
+OBSOLETE_SLOGAN = re.compile(r"\benterprise\s+stays?\s+in\b", re.I)
+
+PRIVATE_REPO_PATTERNS = [
+    re.compile(re.escape(PRIVATE_REPO), re.I),
+    re.compile(r"\b" + re.escape(PRIVATE_NAME) + r"\b", re.I),
+    re.compile(r"\b" + re.escape(PRIVATE_ORG) + r"\b", re.I),
+]
+OBSOLETE_LANGUAGE_PATTERNS = [
+    OBSOLETE_SLOGAN,
+    re.compile(r"\b(remains?|stays?|lives?|kept)\s+in\s+(the\s+)?(enterprise|factory|private)\s+(repo|repository|factory)", re.I),
+    re.compile(r"\bfactory\b.*\bgithub\.com\b|\bgithub\.com\b.*\bfactory\b", re.I),
+    re.compile(r"\bcopy\s+(or\s+mirror\s+)?of\s+(that|the)\s+factory\b", re.I),
+]
+
+# --- structural policy --------------------------------------------------------
+
+FORBIDDEN_TREES = {"src", "tools", "packaging", "hosted", "supabase", "acceptance", "release"}
 ENTERPRISE_PROJECT_FILES = {"verify.py", "pyproject.toml", "setup.py", "DESIGN.md", "PRODUCT.md"}
 FACTORY_WORKFLOWS = {
     "community-bundles.yml",
@@ -28,55 +56,59 @@ FACTORY_WORKFLOWS = {
     "community-windows-input-review.yml",
     "community-acceptance.yml",
 }
-STAGING_TAG = "community-acceptance-staging-2026-08-29"
-ENTERPRISE_REPO = "ascendantventures/axloop-edge-poc"
+FACTORY_LANGUAGE = [
+    re.compile(r"\bcommunity_signing_request\b"),
+    re.compile(r"\bcommunity_native_build\b"),
+    re.compile(r"\bcommunity[-_](bundles|inputs|acceptance|windows[-_]input[-_]review)\b", re.I),
+]
+RELEASE_METADATA_FILES = {".community-release.json", "community-release.json", "release.json", ".release.json"}
+EMPTY_METADATA = {"", "{}", "[]", "null"}
 
 SKIP_DIRS = {".git", "__pycache__", ".venv", "node_modules"}
-MARKDOWN_SUFFIXES = {".md", ".markdown", ".rst", ".txt"}
+MARKDOWN_SUFFIXES = {".md", ".markdown", ".rst"}
+STRUCTURED_SUFFIXES = {".json", ".yml", ".yaml", ".toml"}
 
-PUBLISH_PATTERNS = [
-    re.compile(r"draft\s*:\s*(false|no|off|0)\b", re.I),
+# Publish/tag instructions. Regex sources are written so they do not match themselves.
+PUBLISH_COMMAND_PATTERNS = [
+    re.compile(r"\bgh\s+release\s+(create|edit|upload|delete|delete-asset)\b"),
+    re.compile(r"\bhub\s+release\s+(create|edit)\b"),
+    re.compile(r"\bgit\s+tag\s+(?!(-l\b|--list\b|-n\b|--contains\b|--points-at\b))\S"),
+    re.compile(r"\bgit\s+push\b.*(--tags|--follow-tags|\brefs/tags/)"),
+    re.compile(r"\bdraft\s*[:=]\s*[\"']?(false|no|off|0)\b", re.I),
     re.compile(r"--draft\s*=\s*(false|0|no)\b", re.I),
-    re.compile(r"\bgh\s+release\s+edit\b"),
-    re.compile(r"\bgh\s+release\s+(create|upload)\b.*--(publish|latest)\b"),
     re.compile(r"\bpublish[_-]?release\b|\breleases?/publish\b|\bmake[_-]?latest\b", re.I),
-    re.compile(r"\bprerelease\s*:\s*false\b.*\bdraft\b", re.I),
-    re.compile(r"\bhub\s+release\s+edit\b|\bgithub-release\s+edit\b"),
-    re.compile(r"\"draft\"\s*:\s*false", re.I),
+    re.compile(r"uses:\s*[^#\n]*(gh-release|create-release|release-action|upload-release)", re.I),
 ]
-RELEASE_CREATE = re.compile(r"\bgh\s+release\s+create\b")
-DRAFT_FLAG = re.compile(r"--draft(\s|$|=true|\"|')")
-ACTION_RELEASE_STEP = re.compile(r"uses:\s*[^#\n]*(gh-release|create-release|release-action)", re.I)
+PUBLISHED_METADATA_KEY = re.compile(r"\bpublished[_]at\b")
+RELEASE_WORKFLOW_NAME = re.compile(r"release|publish", re.I)
+RELEASE_WORKFLOW_CONTENT = re.compile(r"^\s*name\s*:\s*.*\b(release|publish)", re.I | re.M)
 
 CLI_RENAME_PATTERNS = [
+    re.compile(r"\baxloop\s+crawler\b"),
     re.compile(r"s/radar/crawler/"),
     re.compile(r"replace\(\s*['\"]radar['\"]\s*,\s*['\"]crawler['\"]\s*\)"),
     re.compile(r"\bgit\s+mv\b.*radar.*crawler"),
-    re.compile(r"\b(mv|rename|ren)\b.*\bradar\b.*\bcrawler\b"),
-    re.compile(r"\brename\b.*\bradar\b.*(->|→|to)\s*\bcrawler\b", re.I),
+    re.compile(r"\b(mv|ren)\b.*\bradar\b.*\bcrawler\b"),
+    re.compile(r"\bradar\b.*(->|→|\bto\b|\brenamed?\b).*\bcrawler\b", re.I),
 ]
-CLI_RENAME_DEFERRED = re.compile(r"\b(later|deferred|not part of this split|future)\b", re.I)
+CLI_RENAME_DEFERRED = re.compile(r"\b(later|deferred|defer|not\s+(yet\s+)?(part|implemented|implement)|do\s+not|don't|future)\b", re.I)
 
-SIGNING_PATTERNS = [
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+PRIVATE_KEY_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
+CI_SIGNING_PATTERNS = [
+    PRIVATE_KEY_BLOCK,
     re.compile(r"\bPKCS\s*#?\s*8\b", re.I),
+    re.compile(r"\bpkcs8\b", re.I),
     re.compile(r"\bed25519\b.*\b(key|sign)", re.I),
     re.compile(r"secrets\.[A-Za-z0-9_]*(SIGN|PRIVATE|PKCS|KEY)[A-Za-z0-9_]*", re.I),
     re.compile(r"\b(SIGNING|PRIVATE)_KEY\b"),
     re.compile(r"\bopenssl\s+(pkeyutl|dgst)\b.*-sign", re.I),
-    re.compile(r"\bopenssl\s+pkcs8\b", re.I),
     re.compile(r"\b(gpg|minisign|cosign|signtool|codesign|rcodesign)\b.*\b(sign|-s\b)", re.I),
-    re.compile(r"\bcommunity_signing_request\b"),
     re.compile(r"\bsigning[_-]?key\b", re.I),
 ]
 
-ENTERPRISE_CHECKOUT_PATTERNS = [
-    re.compile(r"repository\s*:\s*['\"]?" + re.escape(ENTERPRISE_REPO), re.I),
-    re.compile(r"\bgit\s+clone\b.*" + re.escape(ENTERPRISE_REPO)),
-    re.compile(r"github\.com/" + re.escape(ENTERPRISE_REPO)),
-    re.compile(r"\bgh\s+(release|run)\s+download\b.*--repo\s+['\"]?" + re.escape(ENTERPRISE_REPO)),
-    re.compile(r"--repo\s+['\"]?" + re.escape(ENTERPRISE_REPO)),
-]
+FENCE = re.compile(r"^\s*(```|~~~)\s*([A-Za-z0-9_+-]*)")
+SHELL_LANGS = {"", "bash", "sh", "shell", "zsh", "console", "shell-session", "powershell", "ps1", "cmd", "bat"}
+SELF_PATHS = {"scripts/check-community-split.py", "tests/test_community_split.py"}
 
 
 def iter_files(root: Path):
@@ -97,15 +129,14 @@ def is_workflow(root: Path, path: Path) -> bool:
     )
 
 
-def is_markdown(path: Path) -> bool:
-    return path.suffix.lower() in MARKDOWN_SUFFIXES
-
-
-def read_lines(path: Path) -> list[str]:
+def read_text(path: Path) -> str | None:
     try:
-        return path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError as exc:  # pragma: no cover - defensive
-        return [f"<<unreadable: {exc}>>"]
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if b"\x00" in data[:8192]:
+        return None
+    return data.decode("utf-8", errors="replace")
 
 
 def strip_yaml_comment(line: str) -> str:
@@ -120,75 +151,109 @@ def strip_yaml_comment(line: str) -> str:
     return line
 
 
-def check_tree_layout(root: Path, violations: list[str]) -> None:
+def markdown_segments(lines: list[str]):
+    """Yield (lineno, line, kind) where kind is 'prose', 'shell', or 'code'."""
+    fence_lang = None
+    for lineno, line in enumerate(lines, 1):
+        match = FENCE.match(line)
+        if match:
+            fence_lang = None if fence_lang is not None else match.group(2).lower()
+            continue
+        if fence_lang is None:
+            yield lineno, line, "prose"
+        elif fence_lang in SHELL_LANGS:
+            yield lineno, line, "shell"
+        else:
+            yield lineno, line, "code"
+
+
+def instruction_lines(path: Path, lines: list[str]) -> list[tuple[int, str]]:
+    """Lines treated as executable instructions.
+
+    Markdown prose may discuss commands; only fenced code blocks count. Every
+    line of a non-Markdown text file counts.
+    """
+    if path.suffix.lower() not in MARKDOWN_SUFFIXES:
+        return list(enumerate(lines, 1))
+    return [(lineno, line) for lineno, line, kind in markdown_segments(lines) if kind != "prose"]
+
+
+def command_lines(path: Path, lines: list[str]) -> list[tuple[int, str]]:
+    """Lines where a CLI command or migration counts as implemented.
+
+    In Markdown that is prose plus shell fences; other-language fences (for
+    example a Python test fixture quoted in a design document) are not
+    commands a visitor is told to run.
+    """
+    if path.suffix.lower() not in MARKDOWN_SUFFIXES:
+        return list(enumerate(lines, 1))
+    return [(lineno, line) for lineno, line, kind in markdown_segments(lines) if kind != "code"]
+
+
+class Report:
+    def __init__(self) -> None:
+        self.violations: list[str] = []
+
+    def add(self, category: str, location: str, note: str = "") -> None:
+        suffix = f" ({note})" if note else ""
+        self.violations.append(f"{category}: {location}{suffix}")
+
+
+def check_tree_layout(root: Path, report: Report) -> None:
     for child in sorted(root.iterdir()):
         if child.name in SKIP_DIRS:
             continue
-        if child.is_dir() and child.name in ENTERPRISE_DIRS:
-            violations.append(
-                f"enterprise-tree: top-level '{child.name}/' belongs to {ENTERPRISE_REPO}; "
-                "Community is the Releases home, not a copy of the factory"
-            )
+        if child.is_dir() and child.name in FORBIDDEN_TREES:
+            report.add("forbidden implementation tree", f"{child.name}/", "Community carries no build or packaging source")
         if child.is_file() and child.name in ENTERPRISE_PROJECT_FILES:
-            violations.append(
-                f"enterprise-project-file: '{child.name}' is an enterprise project file and must not be copied"
-            )
+            report.add("enterprise project file", child.name, "must not be copied into Community")
 
 
-def check_workflow(root: Path, path: Path, violations: list[str]) -> None:
-    rel = path.relative_to(root)
-    if path.name in FACTORY_WORKFLOWS:
-        violations.append(
-            f"factory-workflow: {rel} is an enterprise factory workflow and must stay in {ENTERPRISE_REPO}"
-        )
+def first_match(patterns, text: str) -> bool:
+    return any(pattern.search(text) for pattern in patterns)
 
-    lines = read_lines(path)
-    code_lines = [strip_yaml_comment(line) for line in lines]
 
-    for lineno, line in enumerate(code_lines, 1):
+def check_leakage(rel: str, lines: list[str], report: Report) -> None:
+    for lineno, line in enumerate(lines, 1):
         loc = f"{rel}:{lineno}"
-        for pattern in PUBLISH_PATTERNS:
-            if pattern.search(line):
-                violations.append(f"release-publish: {loc} can publish or un-draft a release: {line.strip()}")
-                break
-        if RELEASE_CREATE.search(line) and not DRAFT_FLAG.search(line):
-            violations.append(f"release-publish: {loc} creates a release without --draft: {line.strip()}")
-        if STAGING_TAG in line:
-            violations.append(
-                f"staging-tag: {loc} references {STAGING_TAG} in executable workflow configuration"
-            )
-        for pattern in CLI_RENAME_PATTERNS:
-            if pattern.search(line):
-                violations.append(f"cli-rename: {loc} implements radar->crawler rename (deferred): {line.strip()}")
-                break
-        for pattern in SIGNING_PATTERNS:
-            if pattern.search(line):
-                violations.append(f"signing-key: {loc} signing material or key secret in Community CI: {line.strip()}")
-                break
-        for pattern in ENTERPRISE_CHECKOUT_PATTERNS:
-            if pattern.search(line):
-                violations.append(f"enterprise-checkout: {loc} pulls enterprise source or artifacts: {line.strip()}")
-                break
-
-    # A release action step must set draft: true explicitly.
-    for lineno, line in enumerate(code_lines, 1):
-        if ACTION_RELEASE_STEP.search(line):
-            window = "\n".join(code_lines[lineno - 1 : lineno + 15])
-            if not re.search(r"draft\s*:\s*true\b", window):
-                violations.append(
-                    f"release-publish: {rel}:{lineno} release action step does not set 'draft: true' explicitly"
-                )
+        if first_match(PRIVATE_REPO_PATTERNS, line):
+            report.add("private repository reference", loc)
+        if first_match(OBSOLETE_LANGUAGE_PATTERNS, line):
+            report.add("obsolete boundary language", loc)
+        if STAGING_TAG.lower() in line.lower():
+            report.add("staging tag as release input", loc)
+        if PRIVATE_KEY_BLOCK.search(line):
+            report.add("Community CI signing material", loc, "private-key block")
 
 
-def check_code_file(root: Path, path: Path, violations: list[str]) -> None:
-    rel = path.relative_to(root)
-    for lineno, line in enumerate(read_lines(path), 1):
-        for pattern in CLI_RENAME_PATTERNS:
-            if pattern.search(line) and not CLI_RENAME_DEFERRED.search(line):
-                violations.append(f"cli-rename: {rel}:{lineno} implements radar->crawler rename (deferred): {line.strip()}")
-                break
-        if re.search(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", line):
-            violations.append(f"signing-key: {rel}:{lineno} contains private-key material")
+def check_cli_rename(path: Path, rel: str, lines: list[str], report: Report) -> None:
+    for lineno, line in command_lines(path, lines):
+        if first_match(CLI_RENAME_PATTERNS, line) and not CLI_RENAME_DEFERRED.search(line):
+            report.add("deferred CLI rename", f"{rel}:{lineno}")
+
+
+def check_publication(path: Path, rel: str, text: str, lines: list[str], report: Report) -> None:
+    if path.name in RELEASE_METADATA_FILES and text.strip() not in EMPTY_METADATA:
+        report.add("release publication", rel, "nonempty release metadata")
+    if path.suffix.lower() in STRUCTURED_SUFFIXES and PUBLISHED_METADATA_KEY.search(text):
+        report.add("release publication", rel, "published release metadata")
+    for lineno, line in instruction_lines(path, lines):
+        if first_match(PUBLISH_COMMAND_PATTERNS, line):
+            report.add("release publication", f"{rel}:{lineno}", "publish or tag instruction")
+
+
+def check_workflow(path: Path, rel: str, text: str, lines: list[str], report: Report) -> None:
+    if path.name in FACTORY_WORKFLOWS:
+        report.add("copied factory workflow", rel)
+    if RELEASE_WORKFLOW_NAME.search(path.stem) or RELEASE_WORKFLOW_CONTENT.search(text):
+        report.add("release publication", rel, "release workflow")
+    for lineno, raw in enumerate(lines, 1):
+        line = strip_yaml_comment(raw)
+        loc = f"{rel}:{lineno}"
+        if first_match(CI_SIGNING_PATTERNS, line):
+            report.add("Community CI signing material", loc)
+        if first_match(FACTORY_LANGUAGE, line):
+            report.add("copied factory workflow", loc)
 
 
 def main(argv: list[str]) -> int:
@@ -200,34 +265,35 @@ def main(argv: list[str]) -> int:
         print(f"error: {root} is not a directory", file=sys.stderr)
         return 2
 
-    # The checker and its unit tests intentionally contain forbidden strings as fixtures.
-    self_files = {Path(__file__).resolve(), (root / "tests" / "test_community_split.py").resolve()}
-    violations: list[str] = []
-    check_tree_layout(root, violations)
+    report = Report()
+    check_tree_layout(root, report)
 
-    workflows = 0
+    scanned = 0
     for path in iter_files(root):
-        if path.resolve() in self_files:
+        text = read_text(path)
+        if text is None:
             continue
+        scanned += 1
+        rel = path.relative_to(root).as_posix()
+        lines = text.splitlines()
+        check_leakage(rel, lines, report)
+        # The checker and its tests hold non-sensitive rejection fixtures (publish
+        # commands, rename commands, CI signing snippets). They are still scanned
+        # for leakage above: private repository, obsolete language, staging tag.
+        if rel in SELF_PATHS:
+            continue
+        check_cli_rename(path, rel, lines, report)
+        check_publication(path, rel, text, lines, report)
         if is_workflow(root, path):
-            workflows += 1
-            check_workflow(root, path, violations)
-        elif is_markdown(path):
-            continue
-        else:
-            check_code_file(root, path, violations)
+            check_workflow(path, rel, text, lines, report)
 
-    if violations:
-        print(f"FAIL: {len(violations)} Community boundary violation(s) in {root}")
-        for violation in violations:
+    if report.violations:
+        print(f"FAIL: {len(report.violations)} Community policy violation(s) in {root}")
+        for violation in report.violations:
             print(f"  - {violation}")
         return 1
 
-    print(
-        f"PASS: {root} is a Community Releases home "
-        f"(no enterprise tree, no publish path, no staging-tag input, no CLI rename, "
-        f"no signing key; workflows checked: {workflows})"
-    )
+    print(f"PASS: {root} satisfies the Community policy (text files scanned: {scanned})")
     return 0
 
 

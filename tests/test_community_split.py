@@ -292,6 +292,22 @@ class CheckerFixtureTests(unittest.TestCase):
         self.assertIn("obsolete boundary language", output)
 
 
+RELEASE_ARCHIVE = "axloop-community-darwin-arm64-3a7bfeeb.tar.gz"
+RELEASE_CHECKSUMS = "axloop-community-darwin-arm64-3a7bfeeb-SHA256SUMS"
+RELEASE_ARCHIVE_SHA256 = "27e993467ee3b57c891c416ab5963032020b38218f2c57d890f094f791ca2043"
+
+UNPUBLISHED_CLAIM = re.compile(
+    r"(?im)(?:\bno\b[^\n]{0,40}\brelease\b[^\n]{0,30}\bpublished\b|"
+    r"\bno published release\b|\bnot yet published\b|\bunpublished\b)"
+)
+AFFIRMATIVE_OTHER_PLATFORM = re.compile(
+    r"(?im)(?:\b(?:linux|windows)\b(?:(?!\b(?:no|not)\b)[^.\n]){0,40}"
+    r"\b(?:published|available|released)\b|"
+    r"\b(?:published|available|released)\b(?:(?!\b(?:no|not)\b)[^.\n]){0,40}"
+    r"\b(?:linux|windows)\b)"
+)
+
+
 class VisitorJourneyTests(unittest.TestCase):
     """The real repository documents form one consistent release-discovery contract."""
 
@@ -300,14 +316,35 @@ class VisitorJourneyTests(unittest.TestCase):
         self.changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         self.guide = (REPO_ROOT / "docs/COMMUNITY_RELEASES.md").read_text(encoding="utf-8")
 
+    def visitor_documents(self) -> dict[str, str]:
+        return {
+            "README": self.readme,
+            "CHANGELOG": self.changelog,
+            "Community release guide": self.guide,
+        }
+
     def test_readme_has_stranger_first_run_and_public_funnel(self):
         readme = self.readme
         self.assertIn("First run", readme)
         self.assertIn("https://www.axloop.ai", readme)
-        self.assertIn("releases/latest", readme)
         self.assertIn("CHANGELOG.md", readme)
         self.assertIn("docs/COMMUNITY_RELEASES.md", readme)
-        self.assertRegex(readme.lower(), r"no .*release .*published")
+
+        self.assertNotRegex(readme, UNPUBLISHED_CLAIM, "README still claims unpublished")
+        self.assertNotRegex(
+            readme,
+            AFFIRMATIVE_OTHER_PLATFORM,
+            "README claims an unavailable platform is published",
+        )
+
+        self.assertIn("v0.1.0", readme)
+        self.assertIn("darwin-arm64", readme)
+        self.assertIn(LATEST_RELEASE, readme)
+        self.assertIn(RELEASE_ARCHIVE, readme)
+        self.assertIn(RELEASE_CHECKSUMS, readme)
+        self.assertIn(RELEASE_ARCHIVE_SHA256, readme)
+        self.assertIn("bin/axloop-community", readme)
+        self.assertIn(PUBLIC_SITE, readme)
 
     def test_readme_does_not_present_source_checkout_as_install(self):
         lowered = self.readme.lower()
@@ -317,21 +354,36 @@ class VisitorJourneyTests(unittest.TestCase):
         self.assertNotIn("```", self.readme)
 
     def test_release_docs_are_honest_and_consistent(self):
-        self.assertIn("## [Unreleased]", self.changelog)
-        self.assertRegex(self.changelog.lower(), r"no .*release .*published")
-        self.assertIn("releases/latest", self.changelog)
-        self.assertIn("releases/latest", self.guide)
-        self.assertIn("CHANGELOG.md", self.guide)
-        self.assertRegex(self.guide.lower(), r"no .*release .*published")
-        self.assertNotRegex(self.changelog, r"^## \[\d+\.\d+\.\d+\]", msg="no released version may be listed")
+        changelog = self.changelog
+        release_guide = self.guide
+
+        for label, text in self.visitor_documents().items():
+            self.assertNotRegex(text, UNPUBLISHED_CLAIM, f"{label} still claims unpublished")
+            self.assertNotRegex(
+                text,
+                AFFIRMATIVE_OTHER_PLATFORM,
+                f"{label} claims an unavailable platform is published",
+            )
+
+        self.assertRegex(changelog, r"(?m)^## \[Unreleased\]\s*$")
+        self.assertRegex(changelog, r"(?m)^## \[0\.1\.0\] - 2026-09-02\s*$")
+        self.assertIn("darwin-arm64", changelog)
+
+        self.assertIn("v0.1.0", release_guide)
+        self.assertIn("darwin-arm64", release_guide)
+        self.assertIn(LATEST_RELEASE, release_guide)
+        self.assertIn("CHANGELOG.md", release_guide)
 
     def test_documents_contain_no_prohibited_values(self):
-        for text in (self.readme, self.changelog, self.guide):
+        scanned = dict(self.visitor_documents())
+        for path in sorted((REPO_ROOT / "docs" / "superpowers").rglob("*.md")):
+            scanned[path.relative_to(REPO_ROOT).as_posix()] = path.read_text(encoding="utf-8")
+        for label, text in scanned.items():
             lowered = text.lower()
             for sensitive in (PRIVATE_ORG, PRIVATE_NAME, OBSOLETE_LOCATION, STAGING_TAG):
-                self.assertNotIn(sensitive, lowered)
-            self.assertIsNone(re.search(r"\bcrawler\b", lowered))
-            self.assertIsNone(re.search(r"utm_[a-z]+=", lowered))
+                self.assertNotIn(sensitive, lowered, f"{label} contains a protected value")
+            self.assertIsNone(re.search(r"\bcrawler\b", lowered), label)
+            self.assertIsNone(re.search(r"utm_[a-z]+=", lowered), label)
 
     def test_real_repository_passes_checker(self):
         result = run_checker(REPO_ROOT)

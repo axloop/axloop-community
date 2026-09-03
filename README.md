@@ -1,24 +1,28 @@
 # AxLoop Community
 
-AxLoop Community is the community edition of AxLoop. This repository is where Community releases are tracked and where installs will be published.
+AxLoop Community is the community edition of AxLoop. This repository is where Community releases are tracked and where installs are published.
 
 ---
 
 ## First run
 
-1. Check the [latest GitHub Release](https://github.com/axloop/axloop-community/releases/latest) for the newest install.
-2. No Community GitHub Release has been published yet. Until one appears, there is no supported Community install to run.
-3. Read the [changelog](CHANGELOG.md) for notable Community changes and current release status.
+AxLoop Community v0.1.0 is published for Mac with Apple Silicon only (`darwin-arm64`). There is no Linux or Windows build. The download is a plain tar.gz archive with a checksum file; it is not a notarized installer, so verify the checksum yourself before running it.
 
-When the first release is published, the steps above will lead you straight to it: download the install from the latest release, then follow the release notes.
+1. Open the [latest release](https://github.com/axloop/axloop-community/releases/latest).
+2. Download `axloop-community-darwin-arm64-3a7bfeeb.tar.gz` and `axloop-community-darwin-arm64-3a7bfeeb-SHA256SUMS`.
+3. Check that the archive SHA-256 is `27e993467ee3b57c891c416ab5963032020b38218f2c57d890f094f791ca2043`.
+4. Unpack the archive.
+5. From the unpacked directory, run `bin/axloop-community`.
+
+Read the [changelog](CHANGELOG.md) for what each version contains.
 
 ## Enterprise
 
-For the AxLoop enterprise product, visit [axloop.ai](https://www.axloop.ai).
+For enterprise AxLoop, visit [axloop.ai](https://www.axloop.ai).
 
 ## Release information
 
-See [Community releases](docs/COMMUNITY_RELEASES.md) for how versions and installs will be announced.
+See [Community releases](docs/COMMUNITY_RELEASES.md) for how versions and installs are announced and verified.
 
 ---
 

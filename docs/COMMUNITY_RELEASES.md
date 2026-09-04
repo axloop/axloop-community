@@ -12,9 +12,15 @@ The install is a plain tar.gz archive plus a checksum file. It is not a notarize
 2. Download `axloop-community-darwin-arm64-3a7bfeeb.tar.gz` and `axloop-community-darwin-arm64-3a7bfeeb-SHA256SUMS`.
 3. Check that the archive SHA-256 is `27e993467ee3b57c891c416ab5963032020b38218f2c57d890f094f791ca2043`. The `SHA256SUMS` file carries the same value.
 4. Unpack the archive.
-5. From the unpacked directory, run `bin/axloop-community`.
+5. From the unpacked directory, run `bin/axloop-community`. That is the binary the published v0.1.0 archive ships.
 
 For enterprise AxLoop, visit <https://www.axloop.ai>.
+
+## Command name
+
+`axloop-crawler` is the approved user-visible Community CLI, command, and MCP name. Future release notes, install steps, and MCP configuration examples in this repository use `axloop-crawler`; a future release may ship it as the command to run after unpacking.
+
+The published v0.1.0 archive still ships `bin/axloop-community`; it does not contain `axloop-crawler`. `axloop-crawler` is the approved user-visible name for a future release, which is not created or published here.
 
 ## Where to look
 
@@ -29,6 +35,7 @@ This documentation describes the existing v0.1.0 release. It creates no release,
 
 - Release signing material never belongs in Community CI. Signing keys and PKCS#8 material are not stored, referenced, or used by anything in this repository.
 - Historical staging tags are not release inputs. Only tags published on the Releases page are Community releases.
+- `axloop-crawler` is the canonical Community user-visible command. `axloop-radar` is not the Community user-facing CLI name, and documentation of the published v0.1.0 archive must keep saying it ships `bin/axloop-community`.
 
 ## Policy check
 

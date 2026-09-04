@@ -7,6 +7,7 @@ Notable changes to AxLoop Community are recorded here. The format follows [Keep 
 ### Changed
 
 - Refined Community onboarding and release discovery.
+- Rename the approved user-visible Community CLI, command, and MCP name to `axloop-crawler`. The already-published v0.1.0 archive remains unchanged and still ships `bin/axloop-community`; this change publishes nothing.
 
 ## [0.1.0] - 2026-09-02
 

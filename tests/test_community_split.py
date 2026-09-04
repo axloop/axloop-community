@@ -109,7 +109,7 @@ class CheckerFixtureTests(unittest.TestCase):
 
     def test_accepts_clean_funnel_tree(self):
         write(self.root, ".community-release.json", "{}\n")
-        write(self.root, "docs/cli.md", "The Community CLI entry point is `axloop radar`.\n")
+        write(self.root, "docs/cli.md", "The Community CLI entry point is `axloop-crawler`.\n")
         write(
             self.root,
             "docs/enterprise.md",
@@ -117,12 +117,13 @@ class CheckerFixtureTests(unittest.TestCase):
         )
         self.assert_accepted()
 
-    def test_accepts_read_only_release_lookup_and_deferred_rename_prose(self):
+    def test_accepts_read_only_release_lookup_and_crawler_command_prose(self):
         write(
             self.root,
             "docs/notes.md",
             "Verify with:\n\n```bash\ngh api repos/axloop/axloop-community/releases\ngit tag --list\n```\n\n"
-            "The CLI `radar` to `crawler` rename is deferred and not implemented here.\n",
+            "Start the Community CLI with:\n\n```bash\naxloop-crawler --once\n```\n\n"
+            "`axloop-crawler` is the canonical Community command and MCP name going forward.\n",
         )
         self.assert_accepted()
 
@@ -226,22 +227,36 @@ class CheckerFixtureTests(unittest.TestCase):
         write(self.root, "docs/policy.md", "PKCS#8 and signing-key material never enter Community CI.\n")
         self.assert_accepted()
 
-    # --- deferred CLI rename ----------------------------------------------
+    # --- Community CLI naming ---------------------------------------------
 
-    def test_rejects_deferred_cli_rename(self):
-        write(self.root, "README.md", "Run `axloop crawler` instead of the old command.")
-        self.assert_rejected("deferred CLI rename")
+    def test_rejects_radar_as_community_cli(self):
+        write(self.root, "README.md", "Run `axloop-radar` to start AxLoop Community.")
+        output = self.assert_rejected("Community CLI naming")
+        self.assertIn("axloop-radar must not be presented as the Community user-facing CLI", output)
+        self.assertIn("axloop-crawler is the canonical Community user-visible command", output)
 
-    def test_rejects_cli_rename_in_markdown_shell_block(self):
-        write(self.root, "docs/usage.md", "Start it with:\n\n```bash\naxloop crawler --once\n```\n")
-        self.assert_rejected("deferred CLI rename")
+    def test_rejects_radar_in_markdown_shell_block(self):
+        write(self.root, "docs/usage.md", "Start it with:\n\n```bash\naxloop-radar --once\n```\n")
+        self.assert_rejected("Community CLI naming")
+
+    def test_rejects_spaced_radar_subcommand_as_community_cli(self):
+        write(self.root, "docs/usage.md", "The Community CLI entry point is `axloop radar`.\n")
+        self.assert_rejected("Community CLI naming")
+
+    def test_allows_negative_radar_policy_statement(self):
+        write(
+            self.root,
+            "docs/naming.md",
+            "`axloop-radar` is not the Community user-facing CLI name; use `axloop-crawler`.\n",
+        )
+        self.assert_accepted()
 
     def test_allows_quoted_test_fixture_in_non_shell_fence(self):
         write(
             self.root,
             "docs/design.md",
             "Required rejection case:\n\n```python\n"
-            "write(root, \"README.md\", \"Run `axloop crawler` instead of the old command.\")\n"
+            "write(root, \"README.md\", \"Run `axloop-radar` to start AxLoop Community.\")\n"
             "write(root, \".community-release.json\", '{\"published_at\":\"2026-09-02\"}')\n"
             "```\n",
         )
@@ -253,11 +268,30 @@ class CheckerFixtureTests(unittest.TestCase):
             "scripts/rename_cli.py",
             "text = open('cli.py').read()\nopen('cli.py', 'w').write(text.replace('radar', 'crawler'))\n",
         )
-        self.assert_rejected("deferred CLI rename")
+        self.assert_rejected("CLI rename migration code")
 
     def test_rejects_cli_rename_in_workflow(self):
         write(self.root, ".github/workflows/ci.yml", "run: sed -i 's/radar/crawler/g' cli.py\n")
-        self.assert_rejected("deferred CLI rename")
+        self.assert_rejected("CLI rename migration code")
+
+    # --- v0.1.0 archive honesty --------------------------------------------
+
+    def test_rejects_claim_that_v010_archive_ships_crawler(self):
+        write(self.root, "docs/COMMUNITY_RELEASES.md", RELEASES_DOC + "\nThe v0.1.0 archive ships `bin/axloop-crawler`.\n")
+        output = self.assert_rejected("v0.1.0 archive honesty")
+        self.assertIn("published v0.1.0 must remain documented as shipping bin/axloop-community", output)
+
+    def test_rejects_claim_that_v010_tarball_contains_crawler(self):
+        write(self.root, "README.md", "The v0.1.0 tarball now contains `axloop-crawler`.\n")
+        self.assert_rejected("v0.1.0 archive honesty")
+
+    def test_allows_truthful_v010_archive_statement(self):
+        write(
+            self.root,
+            "docs/naming.md",
+            "The published v0.1.0 archive still ships `bin/axloop-community`; it does not contain `axloop-crawler`.\n",
+        )
+        self.assert_accepted()
 
     # --- copied factory content ---------------------------------------------
 
@@ -306,6 +340,26 @@ AFFIRMATIVE_OTHER_PLATFORM = re.compile(
     r"\b(?:published|available|released)\b(?:(?!\b(?:no|not)\b)[^.\n]){0,40}"
     r"\b(?:linux|windows)\b)"
 )
+RENAME_POSTPONED = re.compile(
+    r"(?i)(?:\brename\b[^.\n]{0,60}\b(?:deferred|defer|later|postponed|not\s+yet)\b|"
+    r"\b(?:deferred|defer|later|postponed)\b[^.\n]{0,60}\brename\b)"
+)
+V010_CRAWLER_CLAIM = re.compile(
+    r"(?i)\bv?0\.1\.0\b(?:(?!\b(?:not|never|no)\b)[^.\n]){0,80}"
+    r"\b(?:ships?|contains?|includes?|bundles?|provides?|carries|carry)\b"
+    r"(?:(?!\b(?:not|never|no)\b)[^.\n]){0,40}`?(?:bin/)?axloop-crawler`?"
+)
+
+
+def section(text: str, heading: str) -> str:
+    """Return the body of a Markdown section, from `heading` up to the next heading of the same level."""
+    level = heading.split(" ", 1)[0]
+    start = text.find(heading + "\n")
+    if start < 0:
+        raise AssertionError(f"missing section {heading!r}")
+    body = text[start + len(heading):]
+    next_heading = re.search(rf"(?m)^{re.escape(level)} ", body)
+    return body[: next_heading.start()] if next_heading else body
 
 
 class VisitorJourneyTests(unittest.TestCase):
@@ -382,8 +436,49 @@ class VisitorJourneyTests(unittest.TestCase):
             lowered = text.lower()
             for sensitive in (PRIVATE_ORG, PRIVATE_NAME, OBSOLETE_LOCATION, STAGING_TAG):
                 self.assertNotIn(sensitive, lowered, f"{label} contains a protected value")
-            self.assertIsNone(re.search(r"\bcrawler\b", lowered), label)
             self.assertIsNone(re.search(r"utm_[a-z]+=", lowered), label)
+
+    # --- Community CLI naming contract -------------------------------------
+
+    def test_current_copy_names_crawler_and_never_radar(self):
+        for label, text in self.current_user_facing_copy().items():
+            self.assertIn("axloop-crawler", text, f"{label} must name the canonical command")
+            self.assertNotIn("axloop-radar", text, f"{label} presents axloop-radar as the Community CLI")
+            self.assertNotRegex(text, RENAME_POSTPONED, f"{label} still postpones the rename")
+
+    def test_published_v010_copy_stays_truthful(self):
+        for label, text in self.published_v010_copy().items():
+            self.assertIn("v0.1.0", text, label)
+            self.assertIn("bin/axloop-community", text, f"{label} must say v0.1.0 ships bin/axloop-community")
+            self.assertNotIn("v0.1.0 archive ships `bin/axloop-crawler`", text, label)
+            self.assertNotIn("v0.1.0 archive ships `axloop-crawler`", text, label)
+            self.assertNotRegex(text, V010_CRAWLER_CLAIM, f"{label} claims the v0.1.0 archive contains axloop-crawler")
+
+    def test_unreleased_changelog_records_rename_without_postponement(self):
+        unreleased = section(self.changelog, "## [Unreleased]")
+        self.assertIn("axloop-crawler", unreleased)
+        self.assertIn("bin/axloop-community", unreleased)
+        self.assertNotIn("axloop-radar", unreleased)
+        self.assertNotRegex(unreleased, RENAME_POSTPONED, "Unreleased still postpones the rename")
+        self.assertNotRegex(unreleased, V010_CRAWLER_CLAIM)
+
+    def test_v010_release_record_is_not_rewritten(self):
+        released = section(self.changelog, "## [0.1.0] - 2026-09-02")
+        self.assertNotIn("axloop-crawler", released)
+        self.assertIn("darwin-arm64", released)
+
+    def current_user_facing_copy(self) -> dict[str, str]:
+        return {
+            "README command name": section(self.readme, "## Command name"),
+            "Community release guide command name": section(self.guide, "## Command name"),
+            "CHANGELOG Unreleased": section(self.changelog, "## [Unreleased]"),
+        }
+
+    def published_v010_copy(self) -> dict[str, str]:
+        return {
+            "README first run": section(self.readme, "## First run"),
+            "Community release guide current release": section(self.guide, "## Current release"),
+        }
 
     def test_real_repository_passes_checker(self):
         result = run_checker(REPO_ROOT)

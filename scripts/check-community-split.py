@@ -11,7 +11,9 @@ location and never echoes the matched value:
   release publication             release workflow, publish/tag command, nonempty release metadata
   staging tag as release input    the historical 2026-08-29 acceptance-staging tag
   Community CI signing material   PKCS#8, signing commands, or key secrets in CI; private keys anywhere
-  deferred CLI rename             the radar->crawler rename implemented as a command or migration
+  Community CLI naming            axloop-radar presented as the Community user-facing CLI
+  CLI rename migration code       a radar->crawler rename implemented as code in Community
+  v0.1.0 archive honesty          a claim that the published v0.1.0 archive contains axloop-crawler
   copied factory workflow         enterprise factory workflow names or tooling
   forbidden implementation tree   top-level src/, tools/, packaging/ and other factory trees
   enterprise project file         enterprise project/metadata file copied into Community
@@ -83,15 +85,34 @@ PUBLISHED_METADATA_KEY = re.compile(r"\bpublished[_]at\b")
 RELEASE_WORKFLOW_NAME = re.compile(r"release|publish", re.I)
 RELEASE_WORKFLOW_CONTENT = re.compile(r"^\s*name\s*:\s*.*\b(release|publish)", re.I | re.M)
 
-CLI_RENAME_PATTERNS = [
-    re.compile(r"\baxloop\s+crawler\b"),
+# Community CLI naming contract.
+CANONICAL_COMMUNITY_COMMAND = "axloop-crawler"
+FORBIDDEN_COMMUNITY_COMMAND = "axloop-radar"
+PUBLISHED_V010_BINARY = "bin/axloop-community"
+
+FORBIDDEN_COMMAND_PATTERN = re.compile(r"\baxloop[-\s]+radar\b", re.I)
+# A line that negates the radar name, or labels it as the separate enterprise
+# factory implementation, states policy rather than presenting a Community CLI.
+FORBIDDEN_COMMAND_EXEMPT = re.compile(
+    r"\b(not|never|no\s+longer|must\s+not|instead\s+of|factory|enterprise|out\s+of\s+scope)\b", re.I
+)
+CLI_RENAME_CODE_PATTERNS = [
     re.compile(r"s/radar/crawler/"),
     re.compile(r"replace\(\s*['\"]radar['\"]\s*,\s*['\"]crawler['\"]\s*\)"),
     re.compile(r"\bgit\s+mv\b.*radar.*crawler"),
     re.compile(r"\b(mv|ren)\b.*\bradar\b.*\bcrawler\b"),
-    re.compile(r"\bradar\b.*(->|→|\bto\b|\brenamed?\b).*\bcrawler\b", re.I),
 ]
-CLI_RENAME_DEFERRED = re.compile(r"\b(later|deferred|defer|not\s+(yet\s+)?(part|implemented|implement)|do\s+not|don't|future)\b", re.I)
+V010_CRAWLER_CLAIM = re.compile(
+    r"\bv?0\.1\.0\b(?:(?!\b(?:not|never|no)\b)[^.\n]){0,80}"
+    r"\b(?:ships?|contains?|includes?|bundles?|provides?|carries|carry)\b"
+    r"(?:(?!\b(?:not|never|no)\b)[^.\n]){0,40}`?(?:bin/)?" + re.escape(CANONICAL_COMMUNITY_COMMAND) + r"`?",
+    re.I,
+)
+NAMING_RULE = (
+    f"{CANONICAL_COMMUNITY_COMMAND} is the canonical Community user-visible command; "
+    f"{FORBIDDEN_COMMUNITY_COMMAND} must not be presented as the Community user-facing CLI"
+)
+ARCHIVE_RULE = f"published v0.1.0 must remain documented as shipping {PUBLISHED_V010_BINARY}"
 
 PRIVATE_KEY_BLOCK = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
 CI_SIGNING_PATTERNS = [
@@ -226,10 +247,15 @@ def check_leakage(rel: str, lines: list[str], report: Report) -> None:
             report.add("Community CI signing material", loc, "private-key block")
 
 
-def check_cli_rename(path: Path, rel: str, lines: list[str], report: Report) -> None:
+def check_cli_naming(path: Path, rel: str, lines: list[str], report: Report) -> None:
     for lineno, line in command_lines(path, lines):
-        if first_match(CLI_RENAME_PATTERNS, line) and not CLI_RENAME_DEFERRED.search(line):
-            report.add("deferred CLI rename", f"{rel}:{lineno}")
+        loc = f"{rel}:{lineno}"
+        if FORBIDDEN_COMMAND_PATTERN.search(line) and not FORBIDDEN_COMMAND_EXEMPT.search(line):
+            report.add("Community CLI naming", loc, NAMING_RULE)
+        if first_match(CLI_RENAME_CODE_PATTERNS, line):
+            report.add("CLI rename migration code", loc, "Community carries no CLI implementation to rename")
+        if V010_CRAWLER_CLAIM.search(line):
+            report.add("v0.1.0 archive honesty", loc, ARCHIVE_RULE)
 
 
 def check_publication(path: Path, rel: str, text: str, lines: list[str], report: Report) -> None:
@@ -282,7 +308,7 @@ def main(argv: list[str]) -> int:
         # for leakage above: private repository, obsolete language, staging tag.
         if rel in SELF_PATHS:
             continue
-        check_cli_rename(path, rel, lines, report)
+        check_cli_naming(path, rel, lines, report)
         check_publication(path, rel, text, lines, report)
         if is_workflow(root, path):
             check_workflow(path, rel, text, lines, report)
